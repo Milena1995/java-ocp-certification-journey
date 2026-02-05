@@ -1,0 +1,36 @@
+cat > .gitignore << 'EOF'
+# Compiled Java
+*.class
+*.jar
+*.war
+
+# Logs
+*.log
+
+# IDE
+.idea/
+*.iml
+.vscode/
+*.swp
+.DS_Store
+
+# Build
+target/
+build/
+out/
+bin/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.env
+venv/
+
+# Anki
+*.apkg
+
+# OS
+.DS_Store
+Thumbs.db
+EOF
