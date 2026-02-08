@@ -3,48 +3,78 @@ import re
 from pathlib import Path
 import base64
 
+# ============================================================
+# CONFIGURATION GÉNÉRALE
+# ============================================================
 
-# URL locale de l'API AnkiConnect (Anki doit être lancé avec l'extension AnkiConnect active)
+# URL locale de l'API AnkiConnect
+# (Anki doit être lancé avec l'extension AnkiConnect active)
 ANKI_URL = "http://localhost:8765"
 
-
-# Chemin du script actuel (on remonte d'un niveau : parent.parent)
-BASE_DIR = Path(__file__).resolve().parent.parent
+# Dossier racine du script
+BASE_DIR = Path(__file__).resolve().parent
 
 # Dossier contenant les fichiers Markdown à importer
 MARKDOWN_DIR = BASE_DIR / "questions"
 
-# Mapping entre le numéro de module dans le nom de fichier et le nom du deck Anki
+
+# ============================================================
+# MAPPING (MODULE, SOUS-MODULE) -> DECK ANKI
+# ============================================================
+#
+# - Clé : tuple (module, sous_module)
+# - sous_module = None  → module mono-deck
+# - sous_module = "01", "02", ... → sous-deck précis
+#
+# IMPORTANT :
+# Le nom du fichier DOIT être :
+#   module-01-02-xxxx.md
+#           ^^ ^^
+#        module sous-module
+#
+
 MODULE_TO_DECK = {
-    "00": "Java :: OCP SE 21 :: Module 00 — Overview",
-    "01": "Java :: OCP SE 21 :: Module 01 — Date, Time & Types",
-    "02": "Java :: OCP SE 21 :: Module 02 — Control Flow",
-    "03": "Java :: OCP SE 21 :: Module 03 — Object-Oriented Concepts",
-    "04": "Java :: OCP SE 21 :: Module 04 — Exceptions",
-    "05": "Java :: OCP SE 21 :: Module 05 — Arrays & Collections",
-    "06": "Java :: OCP SE 21 :: Module 06 — Streams & Lambdas",
-    "07": "Java :: OCP SE 21 :: Module 07 — Packaging & Deployment",
-    "08": "Java :: OCP SE 21 :: Module 08 — Concurrency",
-    "09": "Java :: OCP SE 21 :: Module 09 — I/O API",
-    "10": "Java :: OCP SE 21 :: Module 10 — Localization",
-    "11": "Java :: OCP SE 21 :: Module 11 — Miscellaneous",
+    # -----------------------
+    # MODULE 01 (split)
+    # -----------------------
+    ("01", "01"): "Java::OCP SE 21::Module 01 — Date, Time & Types::Java Overview & JVM",
+    ("01", "02"): "Java::OCP SE 21::Module 01 — Date, Time & Types::Primitives & Variables",
+    ("01", "03"): "Java::OCP SE 21::Module 01 — Date, Time & Types::Operators & Precedence",
+    ("01", "04"): "Java::OCP SE 21::Module 01 — Date, Time & Types::Wrapper Classes & Conversions",
+    ("01", "05"): "Java::OCP SE 21::Module 01 — Date, Time & Types::Math API & Boolean Logic",
+    ("01", "06"): "Java::OCP SE 21::Module 01 — Date, Time & Types::Strings & Text Manipulation",
+    ("01", "07"): "Java::OCP SE 21::Module 01 — Date, Time & Types::Date & Time API",
+    ("01", "08"): "Java::OCP SE 21::Module 01 — Date, Time & Types::Period, Duration & Formatting",
+    ("01", "09"): "Java::OCP SE 21::Module 01 — Date, Time & Types::Time Zones & DST",
+
+    # -----------------------
+    # MODULES MONO-DECK
+    # -----------------------
+    ("00", None): "Java::OCP SE 21::Module 00 — Overview",
+    ("02", None): "Java::OCP SE 21::Module 02 — Control Flow",
+    ("03", None): "Java::OCP SE 21::Module 03 — Object-Oriented Concepts",
+    ("04", None): "Java::OCP SE 21::Module 04 — Exceptions",
+    ("05", None): "Java::OCP SE 21::Module 05 — Arrays & Collections",
+    ("06", None): "Java::OCP SE 21::Module 06 — Streams & Lambdas",
+    ("07", None): "Java::OCP SE 21::Module 07 — Packaging & Deployment",
+    ("08", None): "Java::OCP SE 21::Module 08 — Concurrency",
+    ("09", None): "Java::OCP SE 21::Module 09 — I/O API",
+    ("10", None): "Java::OCP SE 21::Module 10 — Localization",
+    ("11", None): "Java::OCP SE 21::Module 11 — Miscellaneous",
 }
 
 
-# ------------------------------------------------------------------
-# Fonctions utilitaires Anki / AnkiConnect
-# ------------------------------------------------------------------
-
+# ============================================================
+# ANKICONNECT – FONCTIONS UTILITAIRES
+# ============================================================
 
 def appel_anki(action, params=None):
     """
-    Envoie une requête à l'API AnkiConnect avec l'action donnée.
+    Envoie une requête à AnkiConnect.
 
-    :param action: Nom de l'action AnkiConnect (ex: 'addNote', 'storeMediaFile').
-    :param params: Paramètres à envoyer pour cette action (dict) ou None.
-    :return: Un tuple (result, is_duplicate)
-             - result : contenu du champ 'result' renvoyé par AnkiConnect
-             - is_duplicate : booléen indiquant si l'erreur mentionne un doublon
+    :param action: Nom de l'action AnkiConnect (ex: 'addNote')
+    :param params: Dictionnaire de paramètres
+    :return: (result, is_duplicate)
     """
     payload = {"action": action, "version": 6}
     if params:
@@ -53,98 +83,63 @@ def appel_anki(action, params=None):
     response = requests.post(ANKI_URL, json=payload, timeout=5)
     result = response.json()
 
-    # Si Anki renvoie une erreur qui n'est pas liée à un doublon, on remonte l'exception
+    # Toute erreur autre qu'un doublon est bloquante
     if result.get("error") and "duplicate" not in result["error"].lower():
         raise Exception(result["error"])
 
-    # On renvoie le résultat ainsi qu'un flag indiquant si l'erreur contenait "duplicate"
     return result.get("result"), "duplicate" in str(result.get("error", "")).lower()
 
 
-# ------------------------------------------------------------------
-
+# ============================================================
 
 def uploader_image(chemin_image: Path):
     """
-    Envoie une image à AnkiConnect via l'action 'storeMediaFile'.
-
-    :param chemin_image: Chemin vers le fichier image (Path).
-    :return: Le nom de fichier tel qu'il sera référencé dans Anki.
+    Upload une image locale dans Anki (media collection).
     """
     with open(chemin_image, "rb") as f:
         data = base64.b64encode(f.read()).decode("utf-8")
 
-    # Envoi du fichier encodé en base64 à Anki
     appel_anki(
         "storeMediaFile",
-        {
-            "filename": chemin_image.name,
-            "data": data,
-        },
+        {"filename": chemin_image.name, "data": data},
     )
 
     return chemin_image.name
 
 
-# ------------------------------------------------------------------
-
+# ============================================================
 
 def traiter_images(texte: str):
     """
-    Parcourt le texte Markdown et remplace les images de la forme
-    ![alt](images/xxx.png)
-    par des balises HTML <img src="..."> dont la source est un fichier
-    déjà uploadé dans Anki.
-
-    :param texte: Contenu (question/réponse) en Markdown.
-    :return: Texte avec les liens d'images remplacés.
+    Remplace les images Markdown par <img src="..."> après upload.
     """
     pattern = re.compile(r"!\[[^\]]*\]\((images/[^)]+)\)")
 
     def remplacer(match):
-        # Chemin local vers le fichier image
         chemin = MARKDOWN_DIR / match.group(1)
         if not chemin.exists():
-            # Image introuvable localement : on logge et on laisse le Markdown tel quel
-            print(f"  ⚠️  Image introuvable : {chemin}")
+            print(f"⚠️ Image introuvable : {chemin}")
             return match.group(0)
 
-        # Upload de l'image dans Anki et récupération du nom de fichier
         nom = uploader_image(chemin)
-        print(f"  📷 Image uploadée : {nom}")
-        # Dans Anki, on réfère l'image par <img src="nom_fichier">
         return f'<img src="{nom}">'
 
     return pattern.sub(remplacer, texte)
 
 
-# ------------------------------------------------------------------
-
+# ============================================================
 
 def parser_markdown(fichier: Path):
     """
-    Analyse un fichier Markdown pour en extraire les paires (Question, Réponse).
-
-    Le format attendu est répété dans le fichier :
-        ## Question
-        ...
-        ## Réponse
-        ...
-    Les blocs sont extraits jusqu'au prochain '## Question' ou la fin du fichier.
-
-    :param fichier: Chemin du fichier Markdown (Path).
-    :return: Liste de tuples [(question, reponse), ...] propres (strip).
+    Extrait toutes les paires (Question, Réponse) du fichier Markdown.
     """
-    with fichier.open("r", encoding="utf-8") as f:
-        contenu = f.read()
+    contenu = fichier.read_text(encoding="utf-8")
 
-    # Regex pour capturer chaque bloc "Question ... Réponse ..."
     pattern = re.compile(
         r"## Question\s*(.*?)\s*## Réponse\s*(.*?)(?=\n## Question|\Z)",
         re.DOTALL,
     )
 
-    # On nettoie les espaces superflus et on ne garde que les blocs non vides
     return [
         (q.strip(), r.strip())
         for q, r in pattern.findall(contenu)
@@ -152,23 +147,12 @@ def parser_markdown(fichier: Path):
     ]
 
 
-# ------------------------------------------------------------------
-
+# ============================================================
 
 def ajouter_carte(question, reponse, nom_modele, champs, deck_name):
     """
-    Crée une note Anki à partir d'une question/réponse en utilisant le modèle donné.
-
-    :param question: Texte de la question (front).
-    :param reponse: Texte de la réponse (back).
-    :param nom_modele: Nom du modèle Anki (ex: 'Basique' / 'Basic').
-    :param champs: Liste des noms de champs du modèle.
-    :param deck_name: Nom du deck cible.
-    :return: Tuple (ajoutee, doublon) :
-             - ajoutee : True si la carte a été ajoutée
-             - doublon : True si une carte identique existait déjà
+    Ajoute une carte Anki (Basic / Basique).
     """
-    # Remplacement/Upload des images éventuelles dans la question et la réponse
     question = traiter_images(question)
     reponse = traiter_images(reponse)
 
@@ -185,71 +169,66 @@ def ajouter_carte(question, reponse, nom_modele, champs, deck_name):
         }
     }
 
-    result, duplicate = appel_anki("addNote", payload)
-    # On renvoie un double booléen pour faciliter les stats (ajout vs doublon)
+    _, duplicate = appel_anki("addNote", payload)
     return not duplicate, duplicate
 
 
-# ------------------------------------------------------------------
-
+# ============================================================
+# MAIN
+# ============================================================
 
 def main():
-    """
-    Point d'entrée principal :
-    - Vérifie la connexion à AnkiConnect.
-    - Détermine le modèle de carte ('Basique' ou 'Basic').
-    - Parcourt les fichiers Markdown module-*.md.
-    - Pour chaque fichier, importe toutes les cartes dans le deck correspondant.
-    """
-    # Vérification que l'API AnkiConnect est accessible
+    # Vérification AnkiConnect
     version, _ = appel_anki("version")
     print(f"✅ Anki connecté (version {version})")
 
-    # Récupération des modèles disponibles et choix Basique/Basic
+    # Choix du modèle
     modeles, _ = appel_anki("modelNames")
     nom_modele = "Basique" if "Basique" in modeles else "Basic"
-
-    # Récupération des noms de champs du modèle choisi
     champs, _ = appel_anki("modelFieldNames", {"modelName": nom_modele})
-    print(f"📝 Modèle '{nom_modele}' | Champs : {' / '.join(champs)}")
 
-    # Parcours des fichiers Markdown dans le dossier 'questions'
+    print(f"📝 Modèle : {nom_modele} | Champs : {champs}")
+
+    # Parcours des fichiers Markdown
     for fichier_md in sorted(MARKDOWN_DIR.glob("module-*.md")):
-        # On attend un nom de fichier du type 'module-01-...' pour extraire le numéro de module
-        match = re.match(r"module-(\d+)-", fichier_md.name)
-        if not match:
-            print(f"⏭️  Ignoré : {fichier_md.name}")
-            continue
+        print(f"\n🔎 Fichier : {fichier_md.name}")
 
-        module_num = match.group(1)
-        deck_name = MODULE_TO_DECK.get(module_num)
+        # Format attendu :
+        # module-01-02-xxxx.md
+        match = re.match(r"module-(\d+)-(\d+)-", fichier_md.name, re.IGNORECASE)
 
+        if match:
+            module = match.group(1).zfill(2)
+            submodule = match.group(2).zfill(2)
+        else:
+            # Cas mono-deck : module-02-xxxx.md
+            match = re.match(r"module-(\d+)-", fichier_md.name, re.IGNORECASE)
+            if not match:
+                print("⏭️ Nom invalide, ignoré")
+                continue
+            module = match.group(1).zfill(2)
+            submodule = None
+
+        deck_name = MODULE_TO_DECK.get((module, submodule))
         if not deck_name:
-            # Si le module n'a pas de mapping défini, on le signale et on passe au suivant
-            print(f"⚠️  Module inconnu : {module_num}")
+            print(f"⚠️ Deck non défini pour module {module}, sous-module {submodule}")
             continue
 
-        print(f"\n📦 Import depuis {fichier_md.name}")
-        print(f"➡️  Deck : {deck_name}")
+        print(f"➡️ Deck cible : {deck_name}")
 
-        # Extraction des cartes (question/réponse) depuis le Markdown
         cartes = parser_markdown(fichier_md)
-        print(f"📚 {len(cartes)} carte(s) trouvée(s)")
+        print(f"📚 {len(cartes)} cartes trouvées")
 
-        ajout, doublon = 0, 0
-        # Ajout de chaque carte dans Anki
+        ajout = doublon = 0
         for q, r in cartes:
             ok, dup = ajouter_carte(q, r, nom_modele, champs, deck_name)
-            if ok:
-                ajout += 1
-            elif dup:
-                doublon += 1
+            ajout += ok
+            doublon += dup
 
-        print(f"✅ {ajout} ajoutée(s) | ⏭️  {doublon} ignorée(s)")
+        print(f"✅ {ajout} ajoutées | ⏭️ {doublon} doublons")
 
 
-# ------------------------------------------------------------------
-
+# ============================================================
 
 if __name__ == "__main__":
     main()
